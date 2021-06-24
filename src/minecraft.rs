@@ -74,7 +74,13 @@ impl PlayerProfile {
         let property = self.properties.iter()
             .find(|p| p.name == name)?;
 
-        parse_base64(&property.value).ok()
+        match parse_base64(&property.value) {
+            Ok(property) => property,
+            Err(err) => {
+                log::warn!("failed to parse property: {:?}", err);
+                None
+            }
+        }
     }
 }
 
@@ -116,6 +122,7 @@ pub struct PlayerTextureUrls {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlayerTextureRef {
     pub url: String,
+    #[serde(default = "HashMap::new")]
     pub metadata: HashMap<String, String>,
 }
 
