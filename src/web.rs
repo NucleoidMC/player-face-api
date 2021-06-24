@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use uuid::Uuid;
 use warp::Filter;
 use warp::http::StatusCode;
-use warp::reply;
 
 use crate::api::Api;
 use crate::Config;
@@ -16,9 +15,10 @@ pub async fn run(api: Api, config: Config) {
         .and(warp::addr::remote())
         .and(warp::path::param::<u32>())
         .and(warp::path::param::<Uuid>())
+        .and(warp::header::optional("if-none-match"))
         .and_then({
             let api = api.clone();
-            move |addr, size, uuid| get_face(api.clone(), addr, size, uuid)
+            move |addr, size, uuid, if_none_match| get_face(api.clone(), addr, size, uuid, if_none_match)
         });
 
     warp::serve(face.with(cors))
@@ -26,7 +26,11 @@ pub async fn run(api: Api, config: Config) {
         .await;
 }
 
-async fn get_face(api: Api, addr: Option<SocketAddr>, size: u32, uuid: Uuid) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
+async fn get_face(
+    api: Api, addr: Option<SocketAddr>,
+    size: u32, uuid: Uuid,
+    if_none_match: Option<String>,
+) -> Result<Box<dyn warp::Reply>, warp::Rejection> {
     log::debug!("receiving face request for {0} ({1}x{1}) from {2:?}", uuid, size, addr);
 
     let api = match api.try_access(addr.as_ref()) {
@@ -40,7 +44,13 @@ async fn get_face(api: Api, addr: Option<SocketAddr>, size: u32, uuid: Uuid) -> 
     };
 
     match api.get_face(uuid, scale).await {
-        Ok(face) => Ok(Box::new(face)),
+        Ok(face) => {
+            if !face.matches(if_none_match) {
+                Ok(Box::new(face))
+            } else {
+                Ok(Box::new(StatusCode::NOT_MODIFIED))
+            }
+        }
         Err(err) => {
             log::error!("internal server error: {:?}", err);
             Ok(Box::new(StatusCode::INTERNAL_SERVER_ERROR))

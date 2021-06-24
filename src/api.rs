@@ -16,6 +16,7 @@ use crate::{Config, minecraft};
 use crate::cache::Cache;
 use crate::render;
 use crate::skin::{self, Skin};
+use sha1::Sha1;
 
 const CACHE_CLEAR_INTERVAL: Duration = Duration::from_secs(60 * 60 * 24);
 
@@ -146,16 +147,47 @@ fn encode_image(face: RgbImage) -> Result<ImageBytes> {
     let encoder = PngEncoder::new(&mut bytes);
     encoder.encode(face.as_bytes(), face.width(), face.height(), image::ColorType::Rgb8)?;
 
-    Ok(ImageBytes(Bytes::from(bytes)))
+    Ok(ImageBytes::from(Bytes::from(bytes)))
 }
 
 #[derive(Clone)]
-pub struct ImageBytes(Bytes);
+pub struct ImageBytes {
+    bytes: Bytes,
+    etag: String,
+}
+
+impl ImageBytes {
+    #[inline]
+    pub fn matches(&self, etag: Option<String>) -> bool {
+        match etag {
+            Some(etag) => self.etag == etag,
+            None => false,
+        }
+    }
+}
+
+impl From<Bytes> for ImageBytes {
+    fn from(bytes: Bytes) -> Self {
+        let mut sha1 = Sha1::new();
+        sha1.update(bytes.as_ref());
+        let sha1 = sha1.digest();
+
+        let etag = base64::encode_config(sha1.bytes(), base64::URL_SAFE_NO_PAD);
+        ImageBytes { bytes, etag }
+    }
+}
+
+const CACHE_MAX_AGE: usize = 60 * 60 * 24;
 
 impl warp::Reply for ImageBytes {
     fn into_response(self) -> warp::reply::Response {
-        let mut response = warp::reply::Response::new(self.0.into());
-        response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+        let mut response = warp::reply::Response::new(self.bytes.into());
+
+        let headers = response.headers_mut();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+        headers.insert(header::ETAG, HeaderValue::from_str(&self.etag).unwrap());
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_str(&format!("public, max-age={}, stale-while-revalidate", CACHE_MAX_AGE)).unwrap());
+
         response
     }
 }
